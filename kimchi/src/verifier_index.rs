@@ -178,6 +178,7 @@ where
                 .commitment
         };
 
+
         let domain = self.cs.domain.d1;
 
         let lookup_index = {
@@ -206,8 +207,9 @@ where
                 })
         };
 
+
         // TODO: Switch to commit_evaluations for all index polys
-        VerifierIndex {
+        let res = VerifierIndex {
             domain,
             max_poly_size: self.max_poly_size,
             zk_rows: self.cs.zk_rows,
@@ -312,7 +314,10 @@ where
             endo: self.cs.endo,
             lookup_index,
             linearization: self.linearization.clone(),
-        }
+        };
+
+
+        res
     }
 }
 

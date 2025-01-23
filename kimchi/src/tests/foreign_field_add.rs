@@ -1429,6 +1429,9 @@ where
 #[test]
 // Finalization test
 fn test_ffadd_finalization() {
+    println!("Pre-sleep");
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    println!("Post-sleep");
     // Includes a row to store value 1
     let num_public_inputs = 1;
     let operation = &[FFOps::Add];

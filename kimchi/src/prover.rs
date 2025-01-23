@@ -297,32 +297,35 @@ where
         //~    Note: since the witness is in evaluation form,
         //~    we can use the `commit_evaluation` optimization.
         internal_tracing::checkpoint!(internal_traces; commit_to_witness_columns);
-        let mut w_comm = vec![];
+        // generate blinders if not given externally
+        let blinders_final: Vec<PolyComm<G::ScalarField>> = match blinders {
+            None => (0..COLUMNS)
+                .map(|_| PolyComm::new(vec![UniformRand::rand(rng)]))
+                .collect(),
+            Some(blinders_arr) => blinders_arr
+                .into_iter()
+                .map(|blinder_el| match blinder_el {
+                    None => PolyComm::new(vec![UniformRand::rand(rng)]),
+                    Some(blinder_el_some) => blinder_el_some,
+                })
+                .collect(),
+        };
+        let mut w_comm: Vec<_> = vec![];
         for col in 0..COLUMNS {
-            // witness coeff -> witness eval
             let witness_eval =
                 Evaluations::<G::ScalarField, D<G::ScalarField>>::from_vec_and_domain(
                     witness[col].clone(),
                     index.cs.domain.d1,
                 );
 
-            let com = match blinders.as_ref().and_then(|b| b[col].as_ref()) {
-                // no blinders: blind the witness
-                None => index
-                    .srs
-                    .commit_evaluations(index.cs.domain.d1, &witness_eval, rng),
-                // blinders: blind the witness with them
-                Some(blinder) => {
-                    // TODO: make this a function rather no? mask_with_custom()
-                    let witness_com = index
-                        .srs
-                        .commit_evaluations_non_hiding(index.cs.domain.d1, &witness_eval);
-                    index
-                        .srs
-                        .mask_custom(witness_com, blinder)
-                        .map_err(ProverError::WrongBlinders)?
-                }
-            };
+            // TODO: make this a function rather no? mask_with_custom()
+            let witness_com = index
+                .srs
+                .commit_evaluations_non_hiding(index.cs.domain.d1, &witness_eval);
+            let com = index
+                .srs
+                .mask_custom(witness_com, &blinders_final[col])
+                .map_err(ProverError::WrongBlinders)?;
 
             w_comm.push(com);
         }
@@ -747,6 +750,9 @@ where
         internal_tracing::checkpoint!(internal_traces; compute_quotient_poly);
 
         let quotient_poly = {
+            // @volhovm parallelising these two is hard because they share `index` which
+            // is not threadsafe
+
             // generic
             let mut t4 = {
                 let generic_constraint =
@@ -762,6 +768,7 @@ where
 
                 generic4
             };
+
             // permutation
             let (mut t8, bnd) = {
                 let alphas =
@@ -1486,6 +1493,8 @@ where
         };
 
         internal_tracing::checkpoint!(internal_traces; create_recursive_done);
+
+        panic!("Whoops! on purpose");
         Ok(proof)
     }
 }

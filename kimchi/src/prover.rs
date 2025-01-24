@@ -629,34 +629,12 @@ where
             lookup_context.aggreg8 = Some(aggreg8);
         }
 
-        std::thread::sleep(std::time::Duration::from_millis(500));
-
-        use std::time::Instant;
-        let time_0 = Instant::now();
-
         //~ 1. Compute the permutation aggregation polynomial $z$.
         internal_tracing::checkpoint!(internal_traces; z_permutation_aggregation_polynomial);
         let z_poly = index.perm_aggreg(&witness, &beta, &gamma, rng)?;
 
-        let time_1 = Instant::now();
-
         //~ 1. Commit (hidding) to the permutation aggregation polynomial $z$.
         let z_comm = index.srs.commit(&z_poly, num_chunks, rng);
-
-        let time_2 = Instant::now();
-        let time_3 = Instant::now();
-
-        println!(
-            "witness elapsed: {:.2?}\n
-  {:.2?}\n
-  {:.2?}\n
-  {:.2?}",
-            time_3.duration_since(time_0),
-            time_1.duration_since(time_0),
-            time_2.duration_since(time_1),
-            time_3.duration_since(time_2)
-        );
-        std::thread::sleep(std::time::Duration::from_millis(500));
 
         //~ 1. Absorb the permutation aggregation polynomial $z$ with the Fq-Sponge.
         absorb_commitment(&mut fq_sponge, &z_comm.commitment);
@@ -788,9 +766,14 @@ where
 
             // generic
             let mut t4 = {
+                use std::time::Instant;
+                let time_0 = Instant::now();
+
                 let generic_constraint =
                     generic::Generic::combined_constraints(&all_alphas, &mut cache);
+                let time_1 = Instant::now();
                 let generic4 = generic_constraint.evaluations(&env);
+                let time_2 = Instant::now();
 
                 if cfg!(debug_assertions) {
                     let p4 = public_poly.evaluate_over_domain_by_ref(index.cs.domain.d4);
@@ -798,18 +781,43 @@ where
 
                     check_constraint!(index, gen_minus_pub);
                 }
+                let time_3 = Instant::now();
+                println!(
+                    "generic t4 elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+                    time_3.duration_since(time_0),
+                    time_1.duration_since(time_0),
+                    time_2.duration_since(time_1),
+                    time_3.duration_since(time_2)
+                );
 
                 generic4
             };
 
             // permutation
             let (mut t8, bnd) = {
+                use std::time::Instant;
+                let time_0 = Instant::now();
                 let alphas =
                     all_alphas.get_alphas(ArgumentType::Permutation, permutation::CONSTRAINTS);
+                let time_1 = Instant::now();
                 let (perm, bnd) = index.perm_quot(&lagrange, beta, gamma, &z_poly, alphas)?;
+                let time_2 = Instant::now();
 
                 check_constraint!(index, perm);
-
+                let time_3 = Instant::now();
+                println!(
+                    "permutation t8 elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+                    time_3.duration_since(time_0),
+                    time_1.duration_since(time_0),
+                    time_2.duration_since(time_1),
+                    time_3.duration_since(time_2)
+                );
                 (perm, bnd)
             };
 

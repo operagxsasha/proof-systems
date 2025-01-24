@@ -214,6 +214,9 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         z: &DensePolynomial<F>,
         mut alphas: impl Iterator<Item = F>,
     ) -> Result<(Evaluations<F, D<F>>, DensePolynomial<F>), ProverError> {
+        use std::time::Instant;
+        let time_0 = Instant::now();
+
         let alpha0 = alphas.next().expect("missing power of alpha");
         let alpha1 = alphas.next().expect("missing power of alpha");
         let alpha2 = alphas.next().expect("missing power of alpha");
@@ -222,6 +225,8 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
 
         // constant gamma in evaluation form (in domain d8)
         let gamma = &self.cs.precomputations().constant_1_d8.scale(gamma);
+
+        let time_1 = Instant::now();
 
         //~ The quotient contribution of the permutation is split into two parts $perm$ and $bnd$.
         //~ They will be used by the prover.
@@ -252,37 +257,69 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         //~ $$
         //~
         let perm = {
+            let time_2 = Instant::now();
             // shifts = z(x) *
             // (w[0](x) + gamma + x * beta * shift[0]) *
             // (w[1](x) + gamma + x * beta * shift[1]) * ...
             // (w[6](x) + gamma + x * beta * shift[6])
             // in evaluation form in d8
-            let mut shifts = lagrange.d8.this.z.clone();
-            for (witness, shift) in lagrange.d8.this.w.iter().zip(self.cs.shift.iter()) {
-                let term =
-                    &(witness + gamma) + &self.cs.precomputations().poly_x_d1.scale(beta * shift);
-                shifts = &shifts * &term;
-            }
+            let shifts = lagrange
+                .d8
+                .this
+                .w
+                .par_iter()
+                .zip(self.cs.shift.par_iter())
+                .map(|(witness, shift)| {
+                    &(witness + gamma) + &self.cs.precomputations().poly_x_d1.scale(beta * shift)
+                })
+                .reduce(|| lagrange.d8.this.z.clone(), |mut l, r| {l *= &r; l});
+
+            let time_3 = Instant::now();
+            let time_4 = Instant::now();
 
             // sigmas = z(x * w) *
             // (w8[0] + gamma + sigma[0] * beta) *
             // (w8[1] + gamma + sigma[1] * beta) * ...
             // (w8[6] + gamma + sigma[6] * beta)
             // in evaluation form in d8
-            let mut sigmas = lagrange.d8.next.z.clone();
-            for (witness, sigma) in lagrange
+            let sigmas = lagrange
                 .d8
                 .this
                 .w
-                .iter()
-                .zip(self.column_evaluations.permutation_coefficients8.iter())
-            {
-                let term = witness + &(gamma + &sigma.scale(beta));
-                sigmas = &sigmas * &term;
-            }
+                .par_iter()
+                .zip(self.column_evaluations.permutation_coefficients8.par_iter())
+                .map(|(witness, sigma)| witness + &(gamma + &sigma.scale(beta)))
+                .reduce(|| lagrange.d8.next.z.clone(), |mut l, r| {l *= &r; l});
 
-            &(&shifts - &sigmas).scale(alpha0)
-                * &self.cs.precomputations().permutation_vanishing_polynomial_l
+            let time_5 = Instant::now();
+
+            let time_6 = Instant::now();
+
+            let res = &(&shifts - &sigmas).scale(alpha0)
+                * &self.cs.precomputations().permutation_vanishing_polynomial_l;
+
+            let time_7 = Instant::now();
+
+            println!(
+                "perm_quot in t8 elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+                time_7.duration_since(time_0),
+                time_1.duration_since(time_0),
+                time_2.duration_since(time_1),
+                time_3.duration_since(time_2),
+                time_4.duration_since(time_3),
+                time_5.duration_since(time_4),
+                time_6.duration_since(time_5),
+                time_7.duration_since(time_6)
+            );
+
+            res
         };
 
         //~ and `bnd`:
@@ -324,7 +361,6 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
 
             &bnd1.scale(alpha1) + &bnd2.scale(alpha2)
         };
-
         Ok((perm, bnd))
     }
 
@@ -441,7 +477,6 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         let time_1 = Instant::now();
         let time_2 = Instant::now();
 
-
         //~ For $i = 0, \cdot, n - 4$, where $n$ is the size of the domain,
         //~ evaluations are computed as:
         //~
@@ -480,22 +515,27 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         let ix_chunk_size = n / ix_chunk_num;
 
         // @volhovm: FIXME check correctness of the last batch processing
-        let sub_arrays: Vec<Vec<_>> = (0..ix_chunk_num).into_par_iter().map(|j_chunk| {
-            let start_ix = j_chunk * ix_chunk_size;
-            let end_ix = if j_chunk == ix_chunk_num - 1 {
-                n - 1
-            } else {
-                (j_chunk + 1) * ix_chunk_size
-            };
-            let sub_array: Vec<_> = (start_ix..end_ix).map(|j| {
-                witness
-                    .iter()
-                    .zip(self.column_evaluations.permutation_coefficients8.iter())
-                    .map(|(w, s)| w[j] + (s[8 * j] * beta) + gamma)
-                    .fold(F::one(), |x, y| x * y)
-            }).collect();
-            sub_array
-        }).collect();
+        let sub_arrays: Vec<Vec<_>> = (0..ix_chunk_num)
+            .into_par_iter()
+            .map(|j_chunk| {
+                let start_ix = j_chunk * ix_chunk_size;
+                let end_ix = if j_chunk == ix_chunk_num - 1 {
+                    n - 1
+                } else {
+                    (j_chunk + 1) * ix_chunk_size
+                };
+                let sub_array: Vec<_> = (start_ix..end_ix)
+                    .map(|j| {
+                        witness
+                            .iter()
+                            .zip(self.column_evaluations.permutation_coefficients8.iter())
+                            .map(|(w, s)| w[j] + (s[8 * j] * beta) + gamma)
+                            .fold(F::one(), |x, y| x * y)
+                    })
+                    .collect();
+                sub_array
+            })
+            .collect();
 
         for s in sub_arrays.into_iter() {
             z.extend_from_slice(&s);
@@ -514,22 +554,27 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
 
         let mut z_prefolded = vec![F::one(); 1];
 
-        let sub_arrays_2: Vec<Vec<_>> = (0..ix_chunk_num).into_par_iter().map(|j_chunk| {
-            let start_ix = j_chunk * ix_chunk_size;
-            let end_ix = if j_chunk == ix_chunk_num - 1 {
-                n - 1
-            } else {
-                (j_chunk + 1) * ix_chunk_size
-            };
-            let sub_array_2: Vec<_> = (start_ix..end_ix).map(|j| {
-                witness
-                    .iter()
-                    .zip(self.cs.shift.iter())
-                    .map(|(w, s)| w[j] + (self.cs.sid[j] * beta * s) + gamma)
-                    .fold(F::one(), |x, y| x * y)
-            }).collect();
-            sub_array_2
-        }).collect();
+        let sub_arrays_2: Vec<Vec<_>> = (0..ix_chunk_num)
+            .into_par_iter()
+            .map(|j_chunk| {
+                let start_ix = j_chunk * ix_chunk_size;
+                let end_ix = if j_chunk == ix_chunk_num - 1 {
+                    n - 1
+                } else {
+                    (j_chunk + 1) * ix_chunk_size
+                };
+                let sub_array_2: Vec<_> = (start_ix..end_ix)
+                    .map(|j| {
+                        witness
+                            .iter()
+                            .zip(self.cs.shift.iter())
+                            .map(|(w, s)| w[j] + (self.cs.sid[j] * beta * s) + gamma)
+                            .fold(F::one(), |x, y| x * y)
+                    })
+                    .collect();
+                sub_array_2
+            })
+            .collect();
 
         for s in sub_arrays_2.into_iter() {
             z_prefolded.extend_from_slice(&s);
@@ -538,7 +583,7 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         for j in 0..n - 1 {
             if j != n - zk_rows && j != n - zk_rows + 1 {
                 let x = z[j];
-                z[j + 1] *= z_prefolded[j+1] * x;
+                z[j + 1] *= z_prefolded[j + 1] * x;
             } else {
                 z[j + 1] = F::rand(rng);
             }

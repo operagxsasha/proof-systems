@@ -297,6 +297,8 @@ where
         //~    Note: since the witness is in evaluation form,
         //~    we can use the `commit_evaluation` optimization.
         internal_tracing::checkpoint!(internal_traces; commit_to_witness_columns);
+        use std::time::Instant;
+        let time_0 = Instant::now();
         // generate blinders if not given externally
         let blinders_final: Vec<PolyComm<G::ScalarField>> = match blinders {
             None => (0..COLUMNS)
@@ -310,6 +312,7 @@ where
                 })
                 .collect(),
         };
+        let time_1 = Instant::now();
         let mut w_comm: Vec<_> = vec![];
         for col in 0..COLUMNS {
             let witness_eval =
@@ -329,6 +332,7 @@ where
 
             w_comm.push(com);
         }
+        let time_2 = Instant::now();
 
         let w_comm: [BlindedCommitment<G>; COLUMNS] = w_comm
             .try_into()
@@ -338,6 +342,18 @@ where
         w_comm
             .iter()
             .for_each(|c| absorb_commitment(&mut fq_sponge, &c.commitment));
+        let time_3 = Instant::now();
+
+        println!(
+            "witness elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+            time_3.duration_since(time_0),
+            time_1.duration_since(time_0),
+            time_2.duration_since(time_1),
+            time_3.duration_since(time_2)
+        );
 
         //~ 1. Compute the witness polynomials by interpolating each `COLUMNS` of the witness.
         //~    As mentioned above, we commit using the evaluations form rather than the coefficients

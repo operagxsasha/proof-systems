@@ -313,8 +313,7 @@ where
                 .collect(),
         };
         let time_1 = Instant::now();
-        let mut w_comm: Vec<_> = vec![];
-        for col in 0..COLUMNS {
+        let mut w_comm: Vec<Result<_>> = (0..COLUMNS).into_par_iter().map(|col| {
             let witness_eval =
                 Evaluations::<G::ScalarField, D<G::ScalarField>>::from_vec_and_domain(
                     witness[col].clone(),
@@ -330,9 +329,13 @@ where
                 .mask_custom(witness_com, &blinders_final[col])
                 .map_err(ProverError::WrongBlinders)?;
 
-            w_comm.push(com);
-        }
+            Ok(com)
+        }).collect();
         let time_2 = Instant::now();
+
+        let w_comm_res: Result<Vec<BlindedCommitment<G>>> = w_comm.into_iter().collect();
+
+        let mut w_comm = w_comm_res?;
 
         let w_comm: [BlindedCommitment<G>; COLUMNS] = w_comm
             .try_into()

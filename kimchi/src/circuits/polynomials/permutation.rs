@@ -420,6 +420,9 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         gamma: &F,
         rng: &mut (impl RngCore + CryptoRng),
     ) -> Result<DensePolynomial<F>, ProverError> {
+        use std::time::Instant;
+        let time_0 = Instant::now();
+
         let n = self.cs.domain.d1.size();
 
         let zk_rows = self.cs.zk_rows as usize;
@@ -433,7 +436,11 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         //~ The first evaluation represents the initial value of the accumulator:
         //~ $$z(g^0) = 1$$
 
-        let mut z = vec![F::one(); n];
+        let mut z = vec![F::one(); 1];
+
+        let time_1 = Instant::now();
+        let time_2 = Instant::now();
+
 
         //~ For $i = 0, \cdot, n - 4$, where $n$ is the size of the domain,
         //~ evaluations are computed as:
@@ -468,31 +475,86 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
         //~ \end{align}
         //~ $$
         //~
-        for j in 0..n - 1 {
-            z[j + 1] = witness
-                .iter()
-                .zip(self.column_evaluations.permutation_coefficients8.iter())
-                .map(|(w, s)| w[j] + (s[8 * j] * beta) + gamma)
-                .fold(F::one(), |x, y| x * y);
+
+        let ix_chunk_num = rayon::max_num_threads();
+        let ix_chunk_size = n / ix_chunk_num;
+
+        // @volhovm: FIXME check correctness of the last batch processing
+        let sub_arrays: Vec<Vec<_>> = (0..ix_chunk_num).into_par_iter().map(|j_chunk| {
+            let start_ix = j_chunk * ix_chunk_size;
+            let end_ix = if j_chunk == ix_chunk_num - 1 {
+                n - 1
+            } else {
+                (j_chunk + 1) * ix_chunk_size
+            };
+            let sub_array: Vec<_> = (start_ix..end_ix).map(|j| {
+                witness
+                    .iter()
+                    .zip(self.column_evaluations.permutation_coefficients8.iter())
+                    .map(|(w, s)| w[j] + (s[8 * j] * beta) + gamma)
+                    .fold(F::one(), |x, y| x * y)
+            }).collect();
+            sub_array
+        }).collect();
+
+        for s in sub_arrays.into_iter() {
+            z.extend_from_slice(&s);
         }
+
+        let time_3 = Instant::now();
 
         ark_ff::fields::batch_inversion::<F>(&mut z[1..n]);
 
+        let time_4 = Instant::now();
+
+        // @volhovm: FIXME is this OK that we do only zk_rows + 1 and +2 and not zk_rows ... n (which may be more than 2 elements?)
         //~ We randomize the evaluations at `n - zk_rows + 1` and `n - zk_rows + 2` in order to add
         //~ zero-knowledge to the protocol.
         //~
-        for j in 0..n - 1 {
-            if j != n - zk_rows && j != n - zk_rows + 1 {
-                let x = z[j];
-                z[j + 1] *= witness
+
+        let mut z_prefolded = vec![F::one(); 1];
+
+        let sub_arrays_2: Vec<Vec<_>> = (0..ix_chunk_num).into_par_iter().map(|j_chunk| {
+            let start_ix = j_chunk * ix_chunk_size;
+            let end_ix = if j_chunk == ix_chunk_num - 1 {
+                n - 1
+            } else {
+                (j_chunk + 1) * ix_chunk_size
+            };
+            let sub_array_2: Vec<_> = (start_ix..end_ix).map(|j| {
+                witness
                     .iter()
                     .zip(self.cs.shift.iter())
                     .map(|(w, s)| w[j] + (self.cs.sid[j] * beta * s) + gamma)
-                    .fold(x, |z, y| z * y);
+                    .fold(F::one(), |x, y| x * y)
+            }).collect();
+            sub_array_2
+        }).collect();
+
+        for s in sub_arrays_2.into_iter() {
+            z_prefolded.extend_from_slice(&s);
+        }
+
+        for j in 0..n - 1 {
+            if j != n - zk_rows && j != n - zk_rows + 1 {
+                let x = z[j];
+                z[j + 1] *= z_prefolded[j+1] * x;
             } else {
                 z[j + 1] = F::rand(rng);
             }
         }
+        //for j in 0..n - 1 {
+        //    if j != n - zk_rows && j != n - zk_rows + 1 {
+        //        let x = z[j];
+        //        z[j + 1] *= witness
+        //            .iter()
+        //            .zip(self.cs.shift.iter())
+        //            .map(|(w, s)| w[j] + (self.cs.sid[j] * beta * s) + gamma)
+        //            .fold(x, |z, y| z * y);
+        //    } else {
+        //        z[j + 1] = F::rand(rng);
+        //    }
+        //}
 
         //~ For a valid witness, we then have have $z(g^{n-zk_rows}) = 1$.
         //~
@@ -500,7 +562,28 @@ impl<F: PrimeField, G: KimchiCurve<ScalarField = F>, OpeningProof: OpenProof<G>>
             return Err(ProverError::Permutation("final value"));
         };
 
+        let time_5 = Instant::now();
+
         let res = Evaluations::<F, D<F>>::from_vec_and_domain(z, self.cs.domain.d1).interpolate();
+
+        let time_6 = Instant::now();
+
+        println!(
+            "perm_aggreg elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+            time_6.duration_since(time_0),
+            time_1.duration_since(time_0),
+            time_2.duration_since(time_1),
+            time_3.duration_since(time_2),
+            time_4.duration_since(time_4),
+            time_5.duration_since(time_4),
+            time_6.duration_since(time_5)
+        );
         Ok(res)
     }
 }

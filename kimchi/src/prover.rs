@@ -297,8 +297,6 @@ where
         //~    Note: since the witness is in evaluation form,
         //~    we can use the `commit_evaluation` optimization.
         internal_tracing::checkpoint!(internal_traces; commit_to_witness_columns);
-        use std::time::Instant;
-        let time_0 = Instant::now();
         // generate blinders if not given externally
         let blinders_final: Vec<PolyComm<G::ScalarField>> = match blinders {
             None => (0..COLUMNS)
@@ -312,26 +310,27 @@ where
                 })
                 .collect(),
         };
-        let time_1 = Instant::now();
-        let mut w_comm: Vec<Result<_>> = (0..COLUMNS).into_par_iter().map(|col| {
-            let witness_eval =
-                Evaluations::<G::ScalarField, D<G::ScalarField>>::from_vec_and_domain(
-                    witness[col].clone(),
-                    index.cs.domain.d1,
-                );
+        let mut w_comm: Vec<Result<_>> = (0..COLUMNS)
+            .into_par_iter()
+            .map(|col| {
+                let witness_eval =
+                    Evaluations::<G::ScalarField, D<G::ScalarField>>::from_vec_and_domain(
+                        witness[col].clone(),
+                        index.cs.domain.d1,
+                    );
 
-            // TODO: make this a function rather no? mask_with_custom()
-            let witness_com = index
-                .srs
-                .commit_evaluations_non_hiding(index.cs.domain.d1, &witness_eval);
-            let com = index
-                .srs
-                .mask_custom(witness_com, &blinders_final[col])
-                .map_err(ProverError::WrongBlinders)?;
+                // TODO: make this a function rather no? mask_with_custom()
+                let witness_com = index
+                    .srs
+                    .commit_evaluations_non_hiding(index.cs.domain.d1, &witness_eval);
+                let com = index
+                    .srs
+                    .mask_custom(witness_com, &blinders_final[col])
+                    .map_err(ProverError::WrongBlinders)?;
 
-            Ok(com)
-        }).collect();
-        let time_2 = Instant::now();
+                Ok(com)
+            })
+            .collect();
 
         let w_comm_res: Result<Vec<BlindedCommitment<G>>> = w_comm.into_iter().collect();
 
@@ -345,30 +344,23 @@ where
         w_comm
             .iter()
             .for_each(|c| absorb_commitment(&mut fq_sponge, &c.commitment));
-        let time_3 = Instant::now();
-
-        println!(
-            "witness elapsed: {:.2?}\n
-  {:.2?}\n
-  {:.2?}\n
-  {:.2?}",
-            time_3.duration_since(time_0),
-            time_1.duration_since(time_0),
-            time_2.duration_since(time_1),
-            time_3.duration_since(time_2)
-        );
 
         //~ 1. Compute the witness polynomials by interpolating each `COLUMNS` of the witness.
         //~    As mentioned above, we commit using the evaluations form rather than the coefficients
         //~    form so we can take advantage of the sparsity of the evaluations (i.e., there are many
         //~    0 entries and entries that have less-than-full-size field elemnts.)
-        let witness_poly: [DensePolynomial<G::ScalarField>; COLUMNS] = array::from_fn(|i| {
-            Evaluations::<G::ScalarField, D<G::ScalarField>>::from_vec_and_domain(
-                witness[i].clone(),
-                index.cs.domain.d1,
-            )
-            .interpolate()
-        });
+        let witness_poly: [DensePolynomial<G::ScalarField>; COLUMNS] = (0..COLUMNS)
+            .into_par_iter()
+            .map(|i| {
+                Evaluations::<G::ScalarField, D<G::ScalarField>>::from_vec_and_domain(
+                    witness[i].clone(),
+                    index.cs.domain.d1,
+                )
+                .interpolate()
+            })
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
 
         let mut lookup_context = LookupContext::default();
 
@@ -637,12 +629,34 @@ where
             lookup_context.aggreg8 = Some(aggreg8);
         }
 
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        use std::time::Instant;
+        let time_0 = Instant::now();
+
         //~ 1. Compute the permutation aggregation polynomial $z$.
         internal_tracing::checkpoint!(internal_traces; z_permutation_aggregation_polynomial);
         let z_poly = index.perm_aggreg(&witness, &beta, &gamma, rng)?;
 
+        let time_1 = Instant::now();
+
         //~ 1. Commit (hidding) to the permutation aggregation polynomial $z$.
         let z_comm = index.srs.commit(&z_poly, num_chunks, rng);
+
+        let time_2 = Instant::now();
+        let time_3 = Instant::now();
+
+        println!(
+            "witness elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+            time_3.duration_since(time_0),
+            time_1.duration_since(time_0),
+            time_2.duration_since(time_1),
+            time_3.duration_since(time_2)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         //~ 1. Absorb the permutation aggregation polynomial $z$ with the Fq-Sponge.
         absorb_commitment(&mut fq_sponge, &z_comm.commitment);

@@ -375,7 +375,7 @@ impl<F: PrimeField> ConstraintSystem<F> {
     /// evaluate witness polynomials over domains
     pub fn evaluate(&self, w: &[DP<F>; COLUMNS], z: &DP<F>) -> WitnessOverDomains<F> {
         use std::{thread, time::Duration};
-        //thread::sleep(Duration::from_secs(1));
+        //std::thread::sleep(std::time::Duration::from_secs(1));
         use std::time::Instant;
         let time_0 = Instant::now();
 

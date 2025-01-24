@@ -1,0 +1,16 @@
+create_recursive                           0.0
+pad_witness                                0.0
+set_up_fq_sponge                           0.01
+commit_to_witness_columns                  0.71
+z_permutation_aggregation_polynomial       1.17
+eval_witness_polynomials_over_domains      1.32
+compute_index_evals                        1.96
+compute_quotient_poly                      1.96
+lagrange_basis_eval_zeta_poly              3.94
+lagrange_basis_eval_zeta_omega_poly        3.94
+chunk_eval_zeta_omega_poly                 3.95
+compute_ft_poly                            3.96
+ft_eval_zeta_omega                         3.98
+build_polynomials                          3.98
+create_aggregated_ipa                      3.98
+create_recursive_done                      4.54

@@ -406,24 +406,46 @@ where
         plnm: &DensePolynomial<G::ScalarField>,
         num_chunks: usize,
     ) -> PolyComm<G> {
+
+        use std::time::Instant;
+        let time_0 = Instant::now();
+
         let is_zero = plnm.is_zero();
 
         let coeffs: Vec<_> = plnm.iter().map(|c| c.into_bigint()).collect();
 
+        let time_1 = Instant::now();
+        use rayon::prelude::*;
+
         // chunk while committing
-        let mut chunks = vec![];
-        if is_zero {
-            chunks.push(G::zero());
+        let mut chunks: Vec<_> = if is_zero {
+            vec![G::zero()]
         } else {
-            coeffs.chunks(self.g.len()).for_each(|coeffs_chunk| {
+            let coeffs_chunks: Vec<_> = coeffs.chunks(self.g.len()).collect();
+            coeffs_chunks.into_par_iter().map(|coeffs_chunk| {
                 let chunk = G::Group::msm_bigint(&self.g, coeffs_chunk);
-                chunks.push(chunk.into_affine());
-            });
-        }
+                chunk.into_affine()
+            }).collect()
+        };
+        let time_2 = Instant::now();
 
         for _ in chunks.len()..num_chunks {
             chunks.push(G::zero());
         }
+
+        let time_3 = Instant::now();
+
+        println!(
+            "commit_non_hiding elapsed: {:.2?}\n
+  {:.2?}\n
+  {:.2?}\n
+  {:.2?}",
+            time_3.duration_since(time_0),
+            time_1.duration_since(time_0),
+            time_2.duration_since(time_1),
+            time_3.duration_since(time_2)
+        );
+
 
         PolyComm::<G>::new(chunks)
     }
